@@ -1,3 +1,6 @@
 [submodule "the block chain"]
 	path = the block chain
 	url = https://github.com/certifychain/the-block-chain
+[submodule "website"]
+	path = website
+	url = https://github.com/certifychain/certifychain.github.io
