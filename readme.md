@@ -73,7 +73,7 @@ underwork
 
 **License**
 
-CertifyChain is licensed under the MIT license.
+CertifyChain is licensed under the [`MIT license`](license.md).
 
 **Contact**
 
