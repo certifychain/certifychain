@@ -3,7 +3,7 @@ const ipfs = @import("ipfs");
 const signature = @import("signature.zig");
 const hash = @import("hash.zig");
 
-pub const PUBLIC_KEY_SIZE = 32;
+pub const public_key_size = 32;
 
 pub const CertificateType = enum(u8) {
     educational,
@@ -29,7 +29,7 @@ pub const VerificationStatus = enum(u8) {
 pub const Issuer = struct {
     id: []const u8,
     name: []const u8,
-    public_key: [PUBLIC_KEY_SIZE]u8,
+    public_key: [public_key_size]u8,
     url: ?[]const u8,
     logo_cid: ?[]const u8,
     description: ?[]const u8,
@@ -39,7 +39,7 @@ pub const Recipient = struct {
     id: []const u8,
     name: []const u8,
     email: ?[]const u8,
-    public_key: [PUBLIC_KEY_SIZE]u8,
+    public_key: [public_key_size]u8,
     orcid: ?[]const u8,
 };
 
@@ -112,21 +112,23 @@ pub const Certificate = struct {
 };
 
 pub const CertificateStore = struct {
+    const Self = @This();
+
     allocator: std.mem.Allocator,
     gateway: ipfs.GatewayClient,
 
-    pub fn init(allocator: std.mem.Allocator, gateway_url: []const u8) CertificateStore {
+    pub fn init(allocator: std.mem.Allocator, gateway_url: []const u8) Self {
         return .{
             .allocator = allocator,
             .gateway = ipfs.GatewayClient.init(allocator, gateway_url),
         };
     }
 
-    pub fn deinit(self: *CertificateStore) void {
+    pub fn deinit(self: *Self) void {
         self.gateway.deinit();
     }
 
-    pub fn storeMetadata(self: *CertificateStore, metadata: CertificateMetadata) ![]const u8 {
+    pub fn storeMetadata(self: *Self, metadata: CertificateMetadata) ![]const u8 {
         const json = try self.serializeMetadata(metadata);
         defer self.allocator.free(json);
 
@@ -136,21 +138,18 @@ pub const CertificateStore = struct {
         return try cid.toString(self.allocator);
     }
 
-    pub fn storeFile(self: *CertificateStore, file_data: []const u8) ![]const u8 {
+    pub fn storeFile(self: *Self, file_data: []const u8) ![]const u8 {
         const mh = try ipfs.multihash.createMultihash(self.allocator, file_data, .sha2_256);
         defer self.allocator.free(mh.digest);
         const cid = ipfs.CID.v1(.raw, mh);
         return try cid.toString(self.allocator);
     }
 
-    pub fn retrieveFromIPFS(self: *CertificateStore, cid_str: []const u8) ![]u8 {
+    pub fn retrieveFromIPFS(self: *Self, cid_str: []const u8) ![]u8 {
         return try self.gateway.fetch(cid_str);
     }
 
-    pub fn storeCertificate(
-        self: *CertificateStore,
-        cert: Certificate,
-    ) !struct { metadata_cid: []const u8, tx_hash: []const u8 } {
+    pub fn store(self: *Self, cert: Certificate) !struct { metadata_cid: []const u8, tx_hash: []const u8 } {
         const metadata_cid = try self.storeMetadata(cert.metadata);
         const tx_hash = try self.storeMetadata(cert.metadata);
 
@@ -160,14 +159,14 @@ pub const CertificateStore = struct {
         };
     }
 
-    pub fn generateCertificateId(self: *CertificateStore, issuer_id: []const u8) ![]u8 {
+    pub fn generateId(self: *Self, issuer_id: []const u8) ![]u8 {
         var random_bytes: [16]u8 = undefined;
         std.crypto.random.bytes(&random_bytes);
         const hex = std.fmt.bytesToHex(random_bytes, .lower);
         return try std.fmt.allocPrint(self.allocator, "CERT-{s}-{s}", .{ issuer_id, &hex });
     }
 
-    fn serializeMetadata(self: *CertificateStore, metadata: CertificateMetadata) ![]u8 {
+    fn serializeMetadata(self: *Self, metadata: CertificateMetadata) ![]u8 {
         var json = std.ArrayList(u8).init(self.allocator);
         errdefer json.deinit();
 
@@ -199,7 +198,13 @@ pub const CertificateStore = struct {
     }
 };
 
-pub fn createEducationalCertificate(
+fn generateUuid(allocator: std.mem.Allocator) ![]u8 {
+    return try std.fmt.allocPrint(allocator, "urn:uuid:{s}", .{
+        &std.fmt.bytesToHex(std.crypto.random.bytes([16]u8), .lower),
+    });
+}
+
+pub fn createEducational(
     allocator: std.mem.Allocator,
     issuer: Issuer,
     recipient: Recipient,
@@ -208,10 +213,14 @@ pub fn createEducationalCertificate(
     issued: u64,
     valid_until: ?u64,
 ) !CertificateMetadata {
-    const cert_id = try std.fmt.allocPrint(allocator, "urn:uuid:{s}", .{
-        &std.fmt.bytesToHex(std.crypto.random.bytes([16]u8), .lower),
-    });
+    const cert_id = try generateUuid(allocator);
     errdefer allocator.free(cert_id);
+
+    const subject_id = try generateUuid(allocator);
+    errdefer allocator.free(subject_id);
+
+    const cred_subject_id = try generateUuid(allocator);
+    errdefer allocator.free(cred_subject_id);
 
     return CertificateMetadata{
         .@"@context" = "https://w3id.org/openbadges/v3",
@@ -222,9 +231,7 @@ pub fn createEducationalCertificate(
         .encoding = "base64",
         .audience = null,
         .subject = .{
-            .id = try std.fmt.allocPrint(allocator, "urn:uuid:{s}", .{
-                &std.fmt.bytesToHex(std.crypto.random.bytes([16]u8), .lower),
-            }),
+            .id = subject_id,
             .name = recipient.name,
             .alternate_name = null,
             .description = null,
@@ -238,9 +245,7 @@ pub fn createEducationalCertificate(
         .valid_until = valid_until,
         .issuer = issuer,
         .credential_subject = .{
-            .id = try std.fmt.allocPrint(allocator, "urn:uuid:{s}", .{
-                &std.fmt.bytesToHex(std.crypto.random.bytes([16]u8), .lower),
-            }),
+            .id = cred_subject_id,
             .name = recipient.name,
             .alternate_name = null,
             .description = null,
@@ -260,7 +265,7 @@ pub fn createEducationalCertificate(
     };
 }
 
-pub fn createProfessionalCertificate(
+pub fn createProfessional(
     allocator: std.mem.Allocator,
     issuer: Issuer,
     recipient: Recipient,
@@ -270,7 +275,7 @@ pub fn createProfessionalCertificate(
     valid_until: ?u64,
     skills: [][]const u8,
 ) !CertificateMetadata {
-    var cert = try createEducationalCertificate(
+    var cert = try createEducational(
         allocator,
         issuer,
         recipient,
@@ -287,7 +292,7 @@ pub fn createProfessionalCertificate(
     return cert;
 }
 
-pub fn createTrainingCertificate(
+pub fn createTraining(
     allocator: std.mem.Allocator,
     issuer: Issuer,
     recipient: Recipient,
@@ -296,10 +301,14 @@ pub fn createTrainingCertificate(
     hours_completed: u32,
     issued: u64,
 ) !CertificateMetadata {
-    const cert_id = try std.fmt.allocPrint(allocator, "urn:uuid:{s}", .{
-        &std.fmt.bytesToHex(std.crypto.random.bytes([16]u8), .lower),
-    });
+    const cert_id = try generateUuid(allocator);
     errdefer allocator.free(cert_id);
+
+    const subject_id = try generateUuid(allocator);
+    errdefer allocator.free(subject_id);
+
+    const cred_subject_id = try generateUuid(allocator);
+    errdefer allocator.free(cred_subject_id);
 
     return CertificateMetadata{
         .@"@context" = "https://w3id.org/openbadges/v3",
@@ -310,9 +319,7 @@ pub fn createTrainingCertificate(
         .encoding = "base64",
         .audience = null,
         .subject = .{
-            .id = try std.fmt.allocPrint(allocator, "urn:uuid:{s}", .{
-                &std.fmt.bytesToHex(std.crypto.random.bytes([16]u8), .lower),
-            }),
+            .id = subject_id,
             .name = recipient.name,
             .alternate_name = null,
             .description = null,
@@ -326,9 +333,7 @@ pub fn createTrainingCertificate(
         .valid_until = null,
         .issuer = issuer,
         .credential_subject = .{
-            .id = try std.fmt.allocPrint(allocator, "urn:uuid:{s}", .{
-                &std.fmt.bytesToHex(std.crypto.random.bytes([16]u8), .lower),
-            }),
+            .id = cred_subject_id,
             .name = recipient.name,
             .alternate_name = null,
             .description = null,
@@ -348,7 +353,7 @@ pub fn createTrainingCertificate(
     };
 }
 
-pub fn createLicenseCertificate(
+pub fn createLicense(
     allocator: std.mem.Allocator,
     issuer: Issuer,
     recipient: Recipient,
@@ -357,10 +362,14 @@ pub fn createLicenseCertificate(
     issued: u64,
     valid_until: u64,
 ) !CertificateMetadata {
-    const cert_id = try std.fmt.allocPrint(allocator, "urn:uuid:{s}", .{
-        &std.fmt.bytesToHex(std.crypto.random.bytes([16]u8), .lower),
-    });
+    const cert_id = try generateUuid(allocator);
     errdefer allocator.free(cert_id);
+
+    const subject_id = try generateUuid(allocator);
+    errdefer allocator.free(subject_id);
+
+    const cred_subject_id = try generateUuid(allocator);
+    errdefer allocator.free(cred_subject_id);
 
     return CertificateMetadata{
         .@"@context" = "https://w3id.org/openbadges/v3",
@@ -371,9 +380,7 @@ pub fn createLicenseCertificate(
         .encoding = "base64",
         .audience = null,
         .subject = .{
-            .id = try std.fmt.allocPrint(allocator, "urn:uuid:{s}", .{
-                &std.fmt.bytesToHex(std.crypto.random.bytes([16]u8), .lower),
-            }),
+            .id = subject_id,
             .name = recipient.name,
             .alternate_name = null,
             .description = null,
@@ -387,9 +394,7 @@ pub fn createLicenseCertificate(
         .valid_until = valid_until,
         .issuer = issuer,
         .credential_subject = .{
-            .id = try std.fmt.allocPrint(allocator, "urn:uuid:{s}", .{
-                &std.fmt.bytesToHex(std.crypto.random.bytes([16]u8), .lower),
-            }),
+            .id = cred_subject_id,
             .name = recipient.name,
             .alternate_name = null,
             .description = null,
@@ -409,7 +414,7 @@ pub fn createLicenseCertificate(
     };
 }
 
-pub fn isExpired(cert: *const Certificate) bool {
+pub fn expired(cert: *const Certificate) bool {
     if (cert.metadata.valid_until) |vu| {
         const now = @as(u64, @intCast(std.time.timestamp()));
         return now > vu;
@@ -417,8 +422,8 @@ pub fn isExpired(cert: *const Certificate) bool {
     return false;
 }
 
-pub fn isValid(cert: *const Certificate) bool {
-    return cert.verification_status == .valid and !isExpired(cert);
+pub fn valid(cert: *const Certificate) bool {
+    return cert.verification_status == .valid and !expired(cert);
 }
 
 test "CertificateType enum values" {

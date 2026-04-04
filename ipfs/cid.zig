@@ -35,11 +35,13 @@ pub const Codec = enum(u64) {
 };
 
 pub const CID = struct {
+    const Self = @This();
+
     version: u8,
     codec: Codec,
     multihash: multihash.Multihash,
 
-    pub fn v0(cid_str: []const u8) !CID {
+    pub fn v0(cid_str: []const u8) !Self {
         if (cid_str.len != 46 or cid_str[0] != 'Q' or cid_str[1] != 'm') {
             return error.InvalidCidV0;
         }
@@ -52,7 +54,7 @@ pub const CID = struct {
         };
     }
 
-    pub fn v1(codec: Codec, mh: multihash.Multihash) CID {
+    pub fn v1(codec: Codec, mh: multihash.Multihash) Self {
         return .{
             .version = 1,
             .codec = codec,
@@ -60,9 +62,9 @@ pub const CID = struct {
         };
     }
 
-    pub fn parse(cid_str: []const u8) !CID {
+    pub fn parse(cid_str: []const u8) !Self {
         if (cid_str.len >= 2 and std.mem.startsWith(u8, cid_str, "Qm")) {
-            return CID.v0(cid_str);
+            return Self.v0(cid_str);
         }
         if (!std.mem.startsWith(u8, cid_str, "bafy")) {
             return error.InvalidCid;
@@ -81,7 +83,7 @@ pub const CID = struct {
         };
     }
 
-    pub fn toString(self: CID, allocator: std.mem.Allocator) ![]u8 {
+    pub fn toString(self: Self, allocator: std.mem.Allocator) ![]u8 {
         var list = std.ArrayList(u8).init(allocator);
         errdefer list.deinit();
         try list.appendSlice(switch (self.version) {
@@ -113,7 +115,7 @@ pub const CID = struct {
         return list.toOwnedSlice();
     }
 
-    pub fn hash(self: CID) []const u8 {
+    pub fn hash(self: Self) []const u8 {
         return self.multihash.digest;
     }
 };

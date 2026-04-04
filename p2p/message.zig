@@ -19,12 +19,14 @@ pub const MessageType = enum(u8) {
 };
 
 pub const Message = struct {
+    const Self = @This();
+
     msg_type: MessageType,
     payload: []u8,
     timestamp: u64,
     ttl: u8,
 
-    pub fn create(msg_type: MessageType, payload: []u8) Message {
+    pub fn create(msg_type: MessageType, payload: []u8) Self {
         return .{
             .msg_type = msg_type,
             .payload = payload,

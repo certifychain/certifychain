@@ -13,30 +13,34 @@ pub const ProviderRecord = struct {
 };
 
 pub const Routing = struct {
+    const Self = @This();
+
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) Routing {
+    pub fn init(allocator: std.mem.Allocator) Self {
         return .{ .allocator = allocator };
     }
 
-    pub fn findProviders(self: *Routing, cid: cid_mod.CID) ![]ProviderRecord {
+    pub fn findProviders(self: *Self, cid: cid_mod.CID) ![]ProviderRecord {
         _ = self;
         _ = cid;
         return &.{};
     }
 
-    pub fn provide(self: *Routing, cid: cid_mod.CID) !void {
+    pub fn provide(self: *Self, cid: cid_mod.CID) !void {
         _ = self;
         _ = cid;
     }
 };
 
 pub const DelegatedRouting = struct {
+    const Self = @This();
+
     allocator: std.mem.Allocator,
     endpoint: []const u8,
     client: std.http.Client,
 
-    pub fn init(allocator: std.mem.Allocator, endpoint: []const u8) DelegatedRouting {
+    pub fn init(allocator: std.mem.Allocator, endpoint: []const u8) Self {
         return .{
             .allocator = allocator,
             .endpoint = endpoint,
@@ -44,11 +48,11 @@ pub const DelegatedRouting = struct {
         };
     }
 
-    pub fn deinit(self: *DelegatedRouting) void {
+    pub fn deinit(self: *Self) void {
         self.client.deinit();
     }
 
-    pub fn findProviders(self: *DelegatedRouting, cid_str: []const u8) ![]u8 {
+    pub fn findProviders(self: *Self, cid_str: []const u8) ![]u8 {
         const url = try std.fmt.allocPrint(self.allocator, "{s}/routing/v1/providers/{s}", .{
             self.endpoint,
             cid_str,
@@ -68,8 +72,6 @@ pub const DelegatedRouting = struct {
 };
 
 pub const IPNS = struct {
-    allocator: std.mem.Allocator,
-
     pub const Record = struct {
         value: []const u8,
         sequence: u64,
@@ -99,21 +101,23 @@ pub const IPNS = struct {
 };
 
 pub const Kademlia = struct {
+    const Self = @This();
+
     allocator: std.mem.Allocator,
     k: usize = 20,
     alpha: usize = 3,
 
-    pub fn init(allocator: std.mem.Allocator) Kademlia {
+    pub fn init(allocator: std.mem.Allocator) Self {
         return .{ .allocator = allocator };
     }
 
-    pub fn nodeId(_: *Kademlia, data: []const u8) []const u8 {
+    pub fn nodeId(_: *Self, data: []const u8) []const u8 {
         var hash: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(data, &hash, .{});
         return hash[0..20];
     }
 
-    pub fn distance(_: *Kademlia, a: []const u8, b: []const u8) [20]u8 {
+    pub fn distance(_: *Self, a: []const u8, b: []const u8) [20]u8 {
         var result: [20]u8 = undefined;
         for (&result, 0..) |r, i| {
             r.* = a[i] ^ b[i];
@@ -121,7 +125,7 @@ pub const Kademlia = struct {
         return result;
     }
 
-    pub fn xorClosest(self: *Kademlia, target: []const u8, peers: []Peer) !Peer {
+    pub fn xorClosest(self: *Self, target: []const u8, peers: []Peer) !Peer {
         if (peers.len == 0) return error.NoPeers;
         var closest = peers[0];
         var min_dist = self.distance(target, closest.id);

@@ -10,12 +10,14 @@ pub const Type = enum(u8) {
 };
 
 pub const Data = struct {
+    const Self = @This();
+
     typ: Type,
     data: []const u8,
     filesize: u64 = 0,
     blocksizes: []const u64 = &.{},
 
-    pub fn file(data: []const u8) Data {
+    pub fn file(data: []const u8) Self {
         return .{
             .typ = .file,
             .data = data,
@@ -23,7 +25,7 @@ pub const Data = struct {
         };
     }
 
-    pub fn directory() Data {
+    pub fn directory() Self {
         return .{
             .typ = .directory,
             .data = &.{},
@@ -33,6 +35,8 @@ pub const Data = struct {
 };
 
 pub const Node = struct {
+    const Self = @This();
+
     links: []Link,
     data: Data,
 
@@ -44,6 +48,8 @@ pub const Node = struct {
 };
 
 pub const Directory = struct {
+    const Self = @This();
+
     entries: std.StringHashMap(Entry),
     allocator: std.mem.Allocator,
 
@@ -53,14 +59,14 @@ pub const Directory = struct {
         node_type: Type,
     };
 
-    pub fn init(allocator: std.mem.Allocator) Directory {
+    pub fn init(allocator: std.mem.Allocator) Self {
         return .{
             .entries = std.StringHashMap(Entry).init(allocator),
             .allocator = allocator,
         };
     }
 
-    pub fn deinit(self: *Directory) void {
+    pub fn deinit(self: *Self) void {
         var it = self.entries.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -68,12 +74,12 @@ pub const Directory = struct {
         self.entries.deinit();
     }
 
-    pub fn put(self: *Directory, name: []const u8, entry: Entry) !void {
+    pub fn put(self: *Self, name: []const u8, entry: Entry) !void {
         const key = try self.allocator.dupe(u8, name);
         try self.entries.put(key, entry);
     }
 
-    pub fn get(self: *Directory, name: []const u8) ?Entry {
+    pub fn get(self: *Self, name: []const u8) ?Entry {
         return self.entries.get(name);
     }
 };

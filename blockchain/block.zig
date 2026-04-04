@@ -1,11 +1,12 @@
 const std = @import("std");
-const crypto = @import("crypto.zig");
-const hash = @import("hash.zig");
+const h = @import("hash.zig");
 
-pub const HASH_SIZE = crypto.HASH_SIZE;
+pub const HASH_SIZE = h.digest_length;
 pub const Hash = [HASH_SIZE]u8;
 
 pub const Block = struct {
+    const Self = @This();
+
     index: u32,
     timestamp: u64,
     previous_hash: Hash,
@@ -13,7 +14,7 @@ pub const Block = struct {
     hash: Hash,
     nonce: u64,
 
-    pub fn calculateHash(self: *const Block) Hash {
+    pub fn hashBlock(self: *const Self) Hash {
         var buf: [256]u8 = undefined;
         var offset: usize = 0;
 
@@ -30,43 +31,39 @@ pub const Block = struct {
         }
         @memcpy(buf[offset..][0..8], std.mem.asBytes(&self.nonce));
 
-        return hash.hashData(buf[0..offset]);
+        return h.hash(buf[0..offset]);
     }
 
-    pub fn mine(self: *Block, difficulty: u8) void {
+    pub fn mine(self: *Self, difficulty: u8) void {
         var nonce: u64 = 0;
         while (true) {
             self.nonce = nonce;
-            self.hash = self.calculateHash();
-            const valid = switch (difficulty) {
-                1 => self.hash[0] == 0,
-                2 => self.hash[0] == 0 and self.hash[1] == 0,
-                3 => self.hash[0] == 0 and self.hash[1] == 0 and self.hash[2] == 0,
-                4 => self.hash[0] == 0 and self.hash[1] == 0 and self.hash[2] == 0 and self.hash[3] == 0,
-                else => self.hash[0] == 0,
-            };
-            if (valid) break;
+            self.hash = self.hashBlock();
+            if (self.validHash(difficulty)) break;
             nonce += 1;
         }
     }
 
-    pub fn isValid(self: *const Block, previous_hash: Hash, difficulty: u8) bool {
-        if (!std.mem.eql(u8, &self.previous_hash, &previous_hash)) return false;
-        const computed = self.calculateHash();
-        if (!std.mem.eql(u8, &self.hash, &computed)) return false;
-        const valid = switch (difficulty) {
+    pub fn validHash(self: *const Self, difficulty: u8) bool {
+        return switch (difficulty) {
             1 => self.hash[0] == 0,
             2 => self.hash[0] == 0 and self.hash[1] == 0,
             3 => self.hash[0] == 0 and self.hash[1] == 0 and self.hash[2] == 0,
             4 => self.hash[0] == 0 and self.hash[1] == 0 and self.hash[2] == 0 and self.hash[3] == 0,
             else => self.hash[0] == 0,
         };
-        return valid;
+    }
+
+    pub fn valid(self: *const Self, previous_hash: Hash, difficulty: u8) bool {
+        if (!std.mem.eql(u8, &self.previous_hash, &previous_hash)) return false;
+        const computed = self.hashBlock();
+        if (!std.mem.eql(u8, &self.hash, &computed)) return false;
+        return self.validHash(difficulty);
     }
 };
 
-pub fn createGenesisBlock() Block {
-    const genesis_hash = hash.hashData("Genesis Block");
+pub fn genesisBlock() Block {
+    const genesis_hash = h.hash("Genesis Block");
     return Block{
         .index = 0,
         .timestamp = 0,
@@ -77,32 +74,32 @@ pub fn createGenesisBlock() Block {
     };
 }
 
-test "createGenesisBlock" {
-    const block = createGenesisBlock();
+test "genesisBlock" {
+    const block = genesisBlock();
     try std.testing.expect(block.index == 0);
     try std.testing.expect(block.timestamp == 0);
 }
 
-test "calculateHash is deterministic" {
+test "hashBlock deterministic" {
     var block = Block{
         .index = 1,
         .timestamp = 1234567890,
         .previous_hash = [_]u8{0} ** HASH_SIZE,
-        .transactions = &.{"test transaction"},
+        .transactions = &.{"test"},
         .hash = undefined,
         .nonce = 0,
     };
-    const hash1 = block.calculateHash();
-    const hash2 = block.calculateHash();
-    try std.testing.expect(std.mem.eql(u8, &hash1, &hash2));
+    const h1 = block.hashBlock();
+    const h2 = block.hashBlock();
+    try std.testing.expect(std.mem.eql(u8, &h1, &h2));
 }
 
-test "different blocks produce different hashes" {
+test "different blocks different hashes" {
     var block1 = Block{
         .index = 1,
         .timestamp = 1234567890,
         .previous_hash = [_]u8{0} ** HASH_SIZE,
-        .transactions = &.{"transaction 1"},
+        .transactions = &.{"tx1"},
         .hash = undefined,
         .nonce = 0,
     };
@@ -110,16 +107,16 @@ test "different blocks produce different hashes" {
         .index = 1,
         .timestamp = 1234567890,
         .previous_hash = [_]u8{0} ** HASH_SIZE,
-        .transactions = &.{"transaction 2"},
+        .transactions = &.{"tx2"},
         .hash = undefined,
         .nonce = 0,
     };
-    const hash1 = block1.calculateHash();
-    const hash2 = block2.calculateHash();
-    try std.testing.expect(!std.mem.eql(u8, &hash1, &hash2));
+    const h1 = block1.hashBlock();
+    const h2 = block2.hashBlock();
+    try std.testing.expect(!std.mem.eql(u8, &h1, &h2));
 }
 
-test "isValid detects tampered block" {
+test "valid detects tampering" {
     var block = Block{
         .index = 1,
         .timestamp = 1234567890,
@@ -128,7 +125,7 @@ test "isValid detects tampered block" {
         .hash = undefined,
         .nonce = 42,
     };
-    block.hash = block.calculateHash();
+    block.hash = block.hashBlock();
     const prev_hash = [_]u8{1} ** HASH_SIZE;
-    try std.testing.expect(!block.isValid(prev_hash, 1));
+    try std.testing.expect(!block.valid(prev_hash, 1));
 }

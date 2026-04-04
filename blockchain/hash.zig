@@ -1,44 +1,39 @@
 const std = @import("std");
 
-pub const HASH_SIZE = 32;
+pub const digest_length: comptime_int = 32;
 
-pub fn hashData(data: []const u8) [HASH_SIZE]u8 {
-    var hash: [HASH_SIZE]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(data, &hash, .{});
-    return hash;
+pub fn hash(data: []const u8) [digest_length]u8 {
+    var result: [digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(data, &result, .{});
+    return result;
 }
 
-pub fn hashBytes(data: []const u8) [HASH_SIZE]u8 {
-    return hashData(data);
+test "hash" {
+    const result = hash("hello world");
+    try std.testing.expect(result.len == digest_length);
 }
 
-test "hashData produces fixed size output" {
-    const data = "hello world";
-    const hash = hashData(data);
-    try std.testing.expect(hash.len == HASH_SIZE);
+test "deterministic" {
+    const a = hash("test");
+    const b = hash("test");
+    try std.testing.expect(std.mem.eql(u8, &a, &b));
 }
 
-test "hashData is deterministic" {
-    const data = "test data";
-    const hash1 = hashData(data);
-    const hash2 = hashData(data);
-    try std.testing.expect(std.mem.eql(u8, &hash1, &hash2));
+test "different inputs" {
+    const a = hash("input1");
+    const b = hash("input2");
+    try std.testing.expect(!std.mem.eql(u8, &a, &b));
 }
 
-test "hashData different inputs produce different hashes" {
-    const hash1 = hashData("input1");
-    const hash2 = hashData("input2");
-    try std.testing.expect(!std.mem.eql(u8, &hash1, &hash2));
+test "known vector" {
+    const result = hash("hello world");
+    try std.testing.expectEqualStrings(
+        "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+        &std.fmt.bytesToHex(result, .lower),
+    );
 }
 
-test "hashData empty input" {
-    const hash = hashData("");
-    try std.testing.expect(hash.len == HASH_SIZE);
-}
-
-test "hashData known test vector" {
-    const hash = hashData("hello world");
-    const expected = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
-    const hex = std.fmt.bytesToHex(hash, .lower);
-    try std.testing.expectEqualStrings(expected, &hex);
+test "empty input" {
+    const result = hash("");
+    try std.testing.expect(result.len == digest_length);
 }

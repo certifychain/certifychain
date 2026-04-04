@@ -16,13 +16,15 @@ pub const MessageType = message.MessageType;
 pub const Message = message.Message;
 
 pub const Node = struct {
+    const Self = @This();
+
     allocator: std.mem.Allocator,
     node_id: NodeId,
     peer_db: PeerDatabase,
     address: Address,
     server: ?std.net.Server,
 
-    pub fn init(allocator: std.mem.Allocator, port: u16) !Node {
+    pub fn init(allocator: std.mem.Allocator, port: u16) !Self {
         var seed: [32]u8 = undefined;
         std.crypto.random.bytes(&seed);
         const node_id = blockchain.hash.hashData(&seed);
@@ -45,28 +47,28 @@ pub const Node = struct {
         };
     }
 
-    pub fn deinit(self: *Node) void {
+    pub fn deinit(self: *Self) void {
         if (self.server) |*s| {
             s.deinit();
         }
         self.peer_db.deinit();
     }
 
-    pub fn start(self: *Node) !void {
+    pub fn start(self: *Self) !void {
         self.server = std.net.Server.listen(
             std.net.Address.parseIp4(self.address.ip, self.address.port) catch return error.InvalidAddress,
             128,
         ) catch return error.FailedToStartServer;
     }
 
-    pub fn broadcastTransaction(self: *Node, _: blockchain.Transaction) !void {
-        const active_peers = self.peer_db.getActivePeers();
+    pub fn broadcastTransaction(self: *Self, _: blockchain.Transaction) !void {
+        const active_peers = self.peer_db.activePeers();
         defer self.allocator.free(active_peers);
 
         for (active_peers) |_| {}
     }
 
-    pub fn handleIncomingConnection(_: *Node, conn: std.net.Server.Connection) !void {
+    pub fn handleIncomingConnection(_: *Self, conn: std.net.Server.Connection) !void {
         defer conn.stream.close();
         var buf: [4096]u8 = undefined;
         const bytes_read = conn.stream.reader().read(&buf) catch return;

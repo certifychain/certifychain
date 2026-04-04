@@ -1,6 +1,8 @@
 const std = @import("std");
 
 pub const Multihash = struct {
+    const Self = @This();
+
     code: Code,
     digest: []const u8,
 
@@ -22,7 +24,7 @@ pub const Multihash = struct {
         }
     };
 
-    pub fn fromBytes(bytes: []const u8) Multihash {
+    pub fn fromBytes(bytes: []const u8) Self {
         if (bytes.len < 3) return undefined;
         const code = Multihash.Code.fromCode(bytes[0]) orelse return undefined;
         const len = bytes[1];
@@ -31,7 +33,7 @@ pub const Multihash = struct {
         return .{ .code = code, .digest = digest };
     }
 
-    pub fn toBytes(self: Multihash, allocator: std.mem.Allocator) ![]u8 {
+    pub fn toBytes(self: Self, allocator: std.mem.Allocator) ![]u8 {
         var list = std.ArrayList(u8).init(allocator);
         errdefer list.deinit();
         try list.append(@intFromEnum(self.code));
@@ -44,7 +46,7 @@ pub const Multihash = struct {
         return list.toOwnedSlice();
     }
 
-    pub fn toBytesAlloc(self: Multihash, allocator: std.mem.Allocator) ![]u8 {
+    pub fn toBytesAlloc(self: Self, allocator: std.mem.Allocator) ![]u8 {
         var list = std.ArrayList(u8).init(allocator);
         errdefer list.deinit();
         try list.append(@intFromEnum(self.code));
@@ -54,16 +56,14 @@ pub const Multihash = struct {
     }
 
     fn computeChecksum(data: []const u8, code: Code) ![]u8 {
-        const hash = switch (code) {
+        const h = switch (code) {
             .sha2_256 => try sha256(data),
             else => return error.UnsupportedHash,
         };
-        return hash[0..2];
+        return h[0..2];
     }
 
     fn sha256(data: []const u8) ![32]u8 {
-        var ctx: [64]u8 = undefined;
-        @memset(&ctx, 0);
         var hash: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(data, &hash, .{});
         return hash;

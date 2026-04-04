@@ -26,18 +26,20 @@ pub const ValidationResponse = struct {
 };
 
 pub const CertificateValidator = struct {
+    const Self = @This();
+
     allocator: std.mem.Allocator,
     db: *anyopaque,
 
-    pub fn init(allocator: std.mem.Allocator, db: *anyopaque) CertificateValidator {
+    pub fn init(allocator: std.mem.Allocator, db: *anyopaque) Self {
         return .{
             .allocator = allocator,
             .db = db,
         };
     }
 
-    pub fn validateCertificate(
-        _: *CertificateValidator,
+    pub fn validate(
+        _: *Self,
         cert_data: blockchain.CertificateData,
         tx_signature: [64]u8,
     ) ValidationResult {
@@ -69,7 +71,7 @@ pub const CertificateValidator = struct {
     }
 };
 
-test "CertificateValidator validateCertificate" {
+test "CertificateValidator validate" {
     const allocator = std.testing.allocator;
     const validator = CertificateValidator.init(allocator, undefined);
     const cert_data = blockchain.CertificateData{
@@ -82,6 +84,6 @@ test "CertificateValidator validateCertificate" {
         .metadata = "{}",
         .ipfs_cid = null,
     };
-    const result = validator.validateCertificate(cert_data, [_]u8{0} ** 64);
+    const result = validator.validate(cert_data, [_]u8{0} ** 64);
     _ = result;
 }

@@ -13,13 +13,15 @@ pub const ConnectionState = enum {
 };
 
 pub const Peer = struct {
+    const Self = @This();
+
     id: PeerId,
     address: address.Address,
     state: ConnectionState,
     last_seen: u64,
     trusted: bool,
 
-    pub fn isActive(self: *const Peer) bool {
+    pub fn active(self: *const Self) bool {
         return self.state == .active;
     }
 };

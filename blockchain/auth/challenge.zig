@@ -1,12 +1,12 @@
 const std = @import("std");
-const hash = @import("../hash.zig");
-const signature = @import("../signature.zig");
+const sig = @import("../signature.zig");
+const h = @import("../hash.zig");
 
-pub const CHALLENGE_SIZE = 32;
-pub const CHALLENGE_EXPIRY_SECONDS: u64 = 300;
+pub const challenge_len = 32;
+pub const challenge_timeout: u64 = 300;
 
 pub const Challenge = struct {
-    challenge: [CHALLENGE_SIZE]u8,
+    challenge: [challenge_len]u8,
     identity_id: []const u8,
     created_at: u64,
     expires_at: u64,
@@ -14,17 +14,19 @@ pub const Challenge = struct {
 };
 
 pub const ChallengeStore = struct {
+    const Self = @This();
+
     allocator: std.mem.Allocator,
     challenges: std.StringHashMap(Challenge),
 
-    pub fn init(allocator: std.mem.Allocator) ChallengeStore {
+    pub fn init(allocator: std.mem.Allocator) Self {
         return .{
             .allocator = allocator,
             .challenges = std.StringHashMap(Challenge).init(allocator),
         };
     }
 
-    pub fn deinit(self: *ChallengeStore) void {
+    pub fn deinit(self: *Self) void {
         var it = self.challenges.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -33,8 +35,8 @@ pub const ChallengeStore = struct {
         self.challenges.deinit();
     }
 
-    pub fn createChallenge(self: *ChallengeStore, identity_id: []const u8) !Challenge {
-        var challenge_bytes: [CHALLENGE_SIZE]u8 = undefined;
+    pub fn create(self: *Self, identity_id: []const u8) !Challenge {
+        var challenge_bytes: [challenge_len]u8 = undefined;
         std.crypto.random.bytes(&challenge_bytes);
 
         const now = @as(u64, @intCast(std.time.timestamp()));
@@ -42,7 +44,7 @@ pub const ChallengeStore = struct {
             .challenge = challenge_bytes,
             .identity_id = try self.allocator.dupe(u8, identity_id),
             .created_at = now,
-            .expires_at = now + CHALLENGE_EXPIRY_SECONDS,
+            .expires_at = now + challenge_timeout,
             .used = false,
         };
 
@@ -51,177 +53,164 @@ pub const ChallengeStore = struct {
         return challenge;
     }
 
-    pub fn getChallenge(self: *ChallengeStore, challenge_bytes: [CHALLENGE_SIZE]u8) ?Challenge {
+    pub fn get(self: *Self, challenge_bytes: [challenge_len]u8) ?Challenge {
         const key = std.fmt.bytesToHex(&challenge_bytes, .lower);
         return self.challenges.get(&key);
     }
 
-    pub fn validateChallenge(self: *ChallengeStore, challenge_bytes: [CHALLENGE_SIZE]u8) bool {
-        const challenge = self.getChallenge(challenge_bytes) orelse return false;
+    pub fn valid(self: *Self, challenge_bytes: [challenge_len]u8) bool {
+        const challenge = self.get(challenge_bytes) orelse return false;
         if (challenge.used) return false;
         const now = @as(u64, @intCast(std.time.timestamp()));
         return now < challenge.expires_at;
     }
 
-    pub fn consumeChallenge(self: *ChallengeStore, challenge_bytes: [CHALLENGE_SIZE]u8) !void {
+    pub fn consume(self: *Self, challenge_bytes: [challenge_len]u8) void {
         const key = std.fmt.bytesToHex(&challenge_bytes, .lower);
         if (self.challenges.getPtr(&key)) |challenge| {
             challenge.used = true;
         }
     }
 
-    pub fn cleanupExpired(self: *ChallengeStore) void {
+    pub fn cleanup(self: *Self) void {
         const now = @as(u64, @intCast(std.time.timestamp()));
-        var to_remove = std.ArrayList([CHALLENGE_SIZE]u8).init(self.allocator);
-        defer to_remove.deinit();
-
         var it = self.challenges.iterator();
         while (it.next()) |entry| {
             if (now >= entry.value_ptr.expires_at) {
-                const challenge_bytes = std.fmt.hexToBytes(&[_]u8{0} ** CHALLENGE_SIZE) catch continue;
-                to_remove.append(challenge_bytes) catch continue;
-            }
-        }
-
-        for (to_remove.items) |challenge_bytes| {
-            const key = std.fmt.bytesToHex(&challenge_bytes, .lower);
-            if (self.challenges.fetchRemove(&key)) |entry| {
-                self.allocator.free(entry.key);
-                self.allocator.free(entry.value.identity_id);
+                self.consume(entry.value_ptr.challenge);
             }
         }
     }
 };
 
-pub const AuthenticationResult = enum(u8) {
+pub const AuthResult = enum(u8) {
     success,
     invalid_signature,
-    expired_challenge,
-    used_challenge,
+    expired,
+    used,
     invalid_identity,
-    unknown_error,
+    unknown,
 };
 
-pub const ChallengeResponseAuthenticator = struct {
-    allocator: std.mem.Allocator,
-    challenge_store: ChallengeStore,
+pub const Authenticator = struct {
+    const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) ChallengeResponseAuthenticator {
+    allocator: std.mem.Allocator,
+    store: ChallengeStore,
+
+    pub fn init(allocator: std.mem.Allocator) Self {
         return .{
             .allocator = allocator,
-            .challenge_store = ChallengeStore.init(allocator),
+            .store = ChallengeStore.init(allocator),
         };
     }
 
-    pub fn deinit(self: *ChallengeResponseAuthenticator) void {
-        self.challenge_store.deinit();
+    pub fn deinit(self: *Self) void {
+        self.store.deinit();
     }
 
-    pub fn requestChallenge(self: *ChallengeResponseAuthenticator, identity_id: []const u8) !Challenge {
-        return self.challenge_store.createChallenge(identity_id);
+    pub fn request(self: *Self, identity_id: []const u8) !Challenge {
+        return self.store.create(identity_id);
     }
 
-    pub fn verifyResponse(
-        self: *ChallengeResponseAuthenticator,
-        challenge_bytes: [CHALLENGE_SIZE]u8,
-        signature_bytes: [signature.SIGNATURE_SIZE]u8,
-        public_key: [signature.PUBLIC_KEY_SIZE]u8,
-    ) AuthenticationResult {
-        if (!self.challenge_store.validateChallenge(challenge_bytes)) {
-            return .expired_challenge;
+    pub fn verify(
+        self: *Self,
+        challenge_bytes: [challenge_len]u8,
+        signature_bytes: [sig.signature_size]u8,
+        public_key: [sig.public_key_size]u8,
+    ) AuthResult {
+        if (!self.store.valid(challenge_bytes)) {
+            return .expired;
         }
 
-        const challenge = self.challenge_store.getChallenge(challenge_bytes) orelse return .unknown_error;
-        if (challenge.used) return .used_challenge;
+        const challenge = self.store.get(challenge_bytes) orelse return .unknown;
+        if (challenge.used) return .used;
 
-        const sig = signature.Signature.fromBytes(signature_bytes);
-        const pubkey = signature.PublicKey.fromBytes(public_key) catch return .invalid_identity;
+        const sig_obj = sig.Signature.fromBytes(signature_bytes);
+        const pk = sig.PublicKey.fromBytes(public_key) catch return .invalid_identity;
 
-        const challenge_hash = hash.hashData(&challenge_bytes);
-        if (!signature.verify(&challenge_hash, sig, pubkey)) {
+        const hash_val = h.hash(&challenge_bytes);
+        if (!sig.verify(sig_obj, &hash_val, pk)) {
             return .invalid_signature;
         }
 
-        self.challenge_store.consumeChallenge(challenge_bytes) catch return .unknown_error;
+        self.store.consume(challenge_bytes);
         return .success;
     }
 };
 
-pub fn generateChallenge() [CHALLENGE_SIZE]u8 {
-    var challenge: [CHALLENGE_SIZE]u8 = undefined;
-    std.crypto.random.bytes(&challenge);
-    return challenge;
+pub fn generateChallenge() [challenge_len]u8 {
+    var c: [challenge_len]u8 = undefined;
+    std.crypto.random.bytes(&c);
+    return c;
 }
 
-pub fn signChallenge(challenge: [CHALLENGE_SIZE]u8, keypair: signature.KeyPair) !signature.Signature {
-    const challenge_hash = hash.hashData(&challenge);
-    return signature.sign(&challenge_hash, keypair);
+pub fn signChallenge(challenge: [challenge_len]u8, kp: sig.KeyPair) !sig.Signature {
+    const hash_val = h.hash(&challenge);
+    return sig.sign(&hash_val, kp);
 }
 
-pub fn verifyChallengeResponse(
-    challenge: [CHALLENGE_SIZE]u8,
-    signature_bytes: [signature.SIGNATURE_SIZE]u8,
-    public_key: [signature.PUBLIC_KEY_SIZE]u8,
+pub fn verifyChallenge(
+    challenge: [challenge_len]u8,
+    signature_bytes: [sig.signature_size]u8,
+    public_key: [sig.public_key_size]u8,
 ) bool {
-    const sig = signature.Signature.fromBytes(signature_bytes);
-    const pubkey = signature.PublicKey.fromBytes(public_key) catch return false;
-    const challenge_hash = hash.hashData(&challenge);
-    return signature.verify(&challenge_hash, sig, pubkey);
+    const sig_obj = sig.Signature.fromBytes(signature_bytes);
+    const pk = sig.PublicKey.fromBytes(public_key) catch return false;
+    const hash_val = h.hash(&challenge);
+    return sig.verify(sig_obj, &hash_val, pk);
 }
 
-test "ChallengeStore initialization" {
+test "ChallengeStore init" {
     const allocator = std.testing.allocator;
     var store = ChallengeStore.init(allocator);
     defer store.deinit();
     try std.testing.expect(store.challenges.count() == 0);
 }
 
-test "ChallengeStore create/get challenge" {
+test "ChallengeStore create/get" {
     const allocator = std.testing.allocator;
     var store = ChallengeStore.init(allocator);
     defer store.deinit();
 
-    const challenge = try store.createChallenge("test-identity");
+    const c = try store.create("user-123");
     try std.testing.expect(store.challenges.count() == 1);
-
-    const retrieved = store.getChallenge(challenge.challenge);
-    try std.testing.expect(retrieved != null);
-    try std.testing.expect(retrieved.?.used == false);
+    try std.testing.expect(!store.get(c.challenge).?.used);
 }
 
-test "ChallengeStore validate/expire challenge" {
+test "ChallengeStore valid/consume" {
     const allocator = std.testing.allocator;
     var store = ChallengeStore.init(allocator);
     defer store.deinit();
 
-    const challenge = try store.createChallenge("test-identity");
-    try std.testing.expect(store.validateChallenge(challenge.challenge) == true);
+    const c = try store.create("user-123");
+    try std.testing.expect(store.valid(c.challenge));
 
-    store.consumeChallenge(challenge.challenge);
-    try std.testing.expect(store.validateChallenge(challenge.challenge) == false);
+    store.consume(c.challenge);
+    try std.testing.expect(!store.valid(c.challenge));
 }
 
 test "generateChallenge" {
-    const c1 = generateChallenge();
-    const c2 = generateChallenge();
-    try std.testing.expect(!std.mem.eql(u8, &c1, &c2));
+    const a = generateChallenge();
+    const b = generateChallenge();
+    try std.testing.expect(!std.mem.eql(u8, &a, &b));
 }
 
-test "signChallenge/verifyChallengeResponse" {
-    const keypair = signature.generateKeyPair();
-    const challenge = generateChallenge();
+test "signChallenge/verifyChallenge" {
+    const kp = sig.generateKeyPair();
+    const c = generateChallenge();
 
-    const sig = try signChallenge(challenge, keypair);
-    const valid = verifyChallengeResponse(challenge, sig.toBytes(), keypair.public_key.bytes);
-    try std.testing.expect(valid == true);
+    const sig_obj = try signChallenge(c, kp);
+    const valid = verifyChallenge(c, sig_obj.toBytes(), kp.public_key.bytes);
+    try std.testing.expect(valid);
 }
 
-test "verifyChallengeResponse rejects wrong signature" {
-    const keypair1 = signature.generateKeyPair();
-    const keypair2 = signature.generateKeyPair();
-    const challenge = generateChallenge();
+test "verifyChallenge rejects wrong key" {
+    const kp1 = sig.generateKeyPair();
+    const kp2 = sig.generateKeyPair();
+    const c = generateChallenge();
 
-    const sig = try signChallenge(challenge, keypair1);
-    const valid = verifyChallengeResponse(challenge, sig.toBytes(), keypair2.public_key.bytes);
-    try std.testing.expect(valid == false);
+    const sig_obj = try signChallenge(c, kp1);
+    const valid = verifyChallenge(c, sig_obj.toBytes(), kp2.public_key.bytes);
+    try std.testing.expect(!valid);
 }
