@@ -74,6 +74,7 @@
         "build.zig",
         "build.zig.zon",
         "app",
+        "ipfs",
         // For example...
         //"LICENSE",
         //"README.md",

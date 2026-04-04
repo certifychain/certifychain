@@ -41,6 +41,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    const ipfs_mod = b.addModule("ipfs", .{
+        .root_source_file = b.path("ipfs/root.zig"),
+        .target = target,
+    });
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -105,6 +110,24 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
 
+    const ipfs_exe = b.addExecutable(.{
+        .name = "ipfs_example",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ipfs/examples/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ipfs", .module = ipfs_mod },
+            },
+        }),
+    });
+    b.installArtifact(ipfs_exe);
+
+    const ipfs_run_step = b.step("ipfs", "Run IPFS example");
+    const ipfs_run_cmd = b.addRunArtifact(ipfs_exe);
+    ipfs_run_step.dependOn(&ipfs_run_cmd.step);
+    ipfs_run_cmd.step.dependOn(b.getInstallStep());
+
     // By making the run step depend on the default step, it will be run from the
     // installation directory rather than directly from within the cache directory.
     run_cmd.step.dependOn(b.getInstallStep());
@@ -121,6 +144,12 @@ pub fn build(b: *std.Build) void {
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });
+
+    const ipfs_mod_tests = b.addTest(.{
+        .root_module = ipfs_mod,
+    });
+
+    const run_ipfs_mod_tests = b.addRunArtifact(ipfs_mod_tests);
 
     // A run step that will run the test executable.
     const run_mod_tests = b.addRunArtifact(mod_tests);
@@ -141,6 +170,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_ipfs_mod_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
