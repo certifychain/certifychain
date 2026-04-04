@@ -22,6 +22,7 @@ pub const CertificateData = struct {
     issue_date: u64,
     expiry_date: u64,
     metadata: []const u8,
+    ipfs_cid: ?[]const u8,
 };
 
 pub const Transaction = struct {
@@ -138,6 +139,7 @@ test "Transaction creation" {
         .issue_date = 1700000000,
         .expiry_date = 1731532800,
         .metadata = "{}",
+        .ipfs_cid = null,
     };
     const tx = try Transaction.createIssueTransaction(
         keypair.public_key.bytes,
@@ -157,6 +159,7 @@ test "Transaction signature verification" {
         .issue_date = 1700000000,
         .expiry_date = 1731532800,
         .metadata = "{}",
+        .ipfs_cid = null,
     };
     const tx = try Transaction.createIssueTransaction(
         keypair.public_key.bytes,
@@ -176,6 +179,7 @@ test "Transaction hash is deterministic" {
         .issue_date = 1700000000,
         .expiry_date = 1731532800,
         .metadata = "{}",
+        .ipfs_cid = null,
     };
     const tx = try Transaction.createIssueTransaction(
         keypair.public_key.bytes,
@@ -208,6 +212,7 @@ test "Invalid transaction - expiry before issue" {
         .issue_date = 1700000000,
         .expiry_date = 1699000000,
         .metadata = "{}",
+        .ipfs_cid = null,
     };
     const tx = try Transaction.createIssueTransaction(
         keypair.public_key.bytes,
@@ -227,6 +232,7 @@ test "Invalid transaction - empty issuer name" {
         .issue_date = 1700000000,
         .expiry_date = 1731532800,
         .metadata = "{}",
+        .ipfs_cid = null,
     };
     const tx = try Transaction.createIssueTransaction(
         keypair.public_key.bytes,

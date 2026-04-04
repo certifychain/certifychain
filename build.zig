@@ -49,6 +49,9 @@ pub fn build(b: *std.Build) void {
     const blockchain_mod = b.addModule("blockchain", .{
         .root_source_file = b.path("blockchain/root.zig"),
         .target = target,
+        .imports = &.{
+            .{ .name = "ipfs", .module = ipfs_mod },
+        },
     });
 
     // Here we define an executable. An executable needs to have a root module
