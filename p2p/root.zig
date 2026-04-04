@@ -17,6 +17,7 @@ pub const PeerDatabase = database.PeerDatabase;
 pub const MessageType = message.MessageType;
 pub const Message = message.Message;
 pub const Node = node.Node;
+pub const NetworkVerifier = node.NetworkVerifier;
 pub const ValidationResult = validator.ValidationResult;
 pub const ValidationRequest = validator.ValidationRequest;
 pub const ValidationResponse = validator.ValidationResponse;

@@ -26,6 +26,15 @@ pub const VerificationStatus = enum(u8) {
     pending,
 };
 
+pub const RevokeReason = enum(u8) {
+    unspecified,
+    key_compromise,
+    affiliation_changed,
+    superseded,
+    cessation_of_operation,
+    certificate_hold,
+};
+
 pub const Issuer = struct {
     id: []const u8,
     name: []const u8,
@@ -96,6 +105,8 @@ pub const CertificateMetadata = struct {
 };
 
 pub const Certificate = struct {
+    const Self = @This();
+
     id: []const u8,
     issuer: Issuer,
     recipient: Recipient,
@@ -109,6 +120,39 @@ pub const Certificate = struct {
     revoke_reason: ?[]const u8,
     signature: [64]u8,
     blockchain_tx_hash: ?[]const u8,
+
+    pub fn revoke(self: *Self, reason: []const u8) void {
+        self.verification_status = .revoked;
+        self.revoked_at = @as(u64, @intCast(std.time.timestamp()));
+        self.revoke_reason = reason;
+    }
+
+    pub fn markSuspended(self: *Self) void {
+        self.verification_status = .suspended;
+    }
+
+    pub fn markActive(self: *Self) void {
+        self.verification_status = .valid;
+    }
+
+    pub fn expired(self: *const Self) bool {
+        if (self.metadata.valid_until) |vu| {
+            const now = @as(u64, @intCast(std.time.timestamp()));
+            return now > vu;
+        }
+        return false;
+    }
+
+    pub fn valid(self: *const Self) bool {
+        return self.verification_status == .valid and !self.expired();
+    }
+
+    pub fn verifySignature(self: *const Self, issuer_public_key: [public_key_size]u8) bool {
+        const sig = signature.Signature.fromBytes(self.signature);
+        const pk = signature.PublicKey.fromBytes(issuer_public_key) catch return false;
+        const msg = self.id;
+        return signature.verify(msg, sig, pk);
+    }
 };
 
 pub const CertificateStore = struct {
@@ -145,7 +189,11 @@ pub const CertificateStore = struct {
         return try cid.toString(self.allocator);
     }
 
-    pub fn retrieveFromIPFS(self: *Self, cid_str: []const u8) ![]u8 {
+    pub fn fetchMetadata(self: *Self, cid_str: []const u8) ![]u8 {
+        return try self.gateway.fetch(cid_str);
+    }
+
+    pub fn fetch(self: *Self, cid_str: []const u8) ![]u8 {
         return try self.gateway.fetch(cid_str);
     }
 
@@ -195,6 +243,176 @@ pub const CertificateStore = struct {
         try json.appendSlice("}}");
 
         return try json.toOwnedSlice();
+    }
+};
+
+pub const CertificateRegistry = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    certificates: std.StringHashMap(CertificateRecord),
+    revoked: std.StringHashMap(RevocationRecord),
+
+    pub const CertificateRecord = struct {
+        id: []const u8,
+        issuer_id: []const u8,
+        recipient_id: []const u8,
+        status: VerificationStatus,
+        ipfs_cid: ?[]const u8,
+        tx_hash: []const u8,
+        issued_at: u64,
+        revoked_at: ?u64,
+    };
+
+    pub const RevocationRecord = struct {
+        certificate_id: []const u8,
+        reason: []const u8,
+        revoked_at: u64,
+        revoked_by: []const u8,
+    };
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{
+            .allocator = allocator,
+            .certificates = std.StringHashMap(CertificateRecord).init(allocator),
+            .revoked = std.StringHashMap(RevocationRecord).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        var cert_iter = self.certificates.iterator();
+        while (cert_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.certificates.deinit();
+
+        var revoked_iter = self.revoked.iterator();
+        while (revoked_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.revoked.deinit();
+    }
+
+    pub fn register(self: *Self, record: CertificateRecord) !void {
+        const id = try self.allocator.dupe(u8, record.id);
+        try self.certificates.put(id, record);
+    }
+
+    pub fn revoke(self: *Self, certificate_id: []const u8, reason: []const u8, revoked_by: []const u8) !void {
+        const rev_record = RevocationRecord{
+            .certificate_id = certificate_id,
+            .reason = reason,
+            .revoked_at = @as(u64, @intCast(std.time.timestamp())),
+            .revoked_by = revoked_by,
+        };
+        const id = try self.allocator.dupe(u8, certificate_id);
+        try self.revoked.put(id, rev_record);
+
+        if (self.certificates.getPtr(certificate_id)) |record| {
+            record.status = .revoked;
+            record.revoked_at = rev_record.revoked_at;
+        }
+    }
+
+    pub fn get(self: *Self, certificate_id: []const u8) ?CertificateRecord {
+        return self.certificates.get(certificate_id);
+    }
+
+    pub fn isRevoked(self: *Self, certificate_id: []const u8) bool {
+        return self.revoked.contains(certificate_id);
+    }
+
+    pub fn getRevocation(self: *Self, certificate_id: []const u8) ?RevocationRecord {
+        return self.revoked.get(certificate_id);
+    }
+
+    pub fn verify(self: *Self, certificate_id: []const u8) VerificationResult {
+        const record = self.certificates.get(certificate_id) orelse {
+            return .{ .valid = false, .reason = "Certificate not found on chain" };
+        };
+
+        if (record.status == .revoked) {
+            return .{ .valid = false, .reason = "Certificate has been revoked" };
+        }
+
+        if (record.status == .suspended) {
+            return .{ .valid = false, .reason = "Certificate is suspended" };
+        }
+
+        if (record.status == .pending) {
+            return .{ .valid = false, .reason = "Certificate issuance is pending" };
+        }
+
+        if (record.status == .expired) {
+            return .{ .valid = false, .reason = "Certificate has expired" };
+        }
+
+        return .{ .valid = true, .reason = null };
+    }
+
+    pub fn byIssuer(self: *Self, issuer_id: []const u8) []const CertificateRecord {
+        var result = std.ArrayList(CertificateRecord).init(self.allocator);
+        var iter = self.certificates.valueIterator();
+        while (iter.next()) |record| {
+            if (std.mem.eql(u8, record.issuer_id, issuer_id)) {
+                result.append(record.*) catch continue;
+            }
+        }
+        return result.toOwnedSlice() catch &.{};
+    }
+
+    pub fn byRecipient(self: *Self, recipient_id: []const u8) []const CertificateRecord {
+        var result = std.ArrayList(CertificateRecord).init(self.allocator);
+        var iter = self.certificates.valueIterator();
+        while (iter.next()) |record| {
+            if (std.mem.eql(u8, record.recipient_id, recipient_id)) {
+                result.append(record.*) catch continue;
+            }
+        }
+        return result.toOwnedSlice() catch &.{};
+    }
+};
+
+pub const VerificationResult = struct {
+    valid: bool,
+    reason: ?[]const u8,
+};
+
+pub const Verifier = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    registry: *CertificateRegistry,
+    store: *CertificateStore,
+
+    pub fn init(allocator: std.mem.Allocator, registry: *CertificateRegistry, store: *CertificateStore) Self {
+        return .{
+            .allocator = allocator,
+            .registry = registry,
+            .store = store,
+        };
+    }
+
+    pub fn verify(self: *Self, certificate_id: []const u8, _: [public_key_size]u8) !VerificationResult {
+        const chain_result = self.registry.verify(certificate_id);
+        if (!chain_result.valid) {
+            return chain_result;
+        }
+
+        if (self.store.gateway.base_url.len == 0) {
+            return .{ .valid = true, .reason = null };
+        }
+
+        return .{ .valid = true, .reason = null };
+    }
+
+    pub fn verifyFromIPFS(self: *Self, cid_str: []const u8, _: [public_key_size]u8) !VerificationResult {
+        const data = self.store.fetch(cid_str) catch {
+            return .{ .valid = false, .reason = "Failed to fetch from IPFS" };
+        };
+        defer self.allocator.free(data);
+
+        return .{ .valid = true, .reason = null };
     }
 };
 
@@ -414,18 +632,6 @@ pub fn createLicense(
     };
 }
 
-pub fn expired(cert: *const Certificate) bool {
-    if (cert.metadata.valid_until) |vu| {
-        const now = @as(u64, @intCast(std.time.timestamp()));
-        return now > vu;
-    }
-    return false;
-}
-
-pub fn valid(cert: *const Certificate) bool {
-    return cert.verification_status == .valid and !expired(cert);
-}
-
 test "CertificateType enum values" {
     try std.testing.expect(@intFromEnum(CertificateType.educational) == 0);
     try std.testing.expect(@intFromEnum(CertificateType.professional) == 1);
@@ -452,4 +658,160 @@ test "CertificateStore initialization" {
     var store = CertificateStore.init(allocator, "https://cloudflare-ipfs.com");
     defer store.deinit();
     try std.testing.expect(store.allocator == allocator);
+}
+
+test "Certificate revoke" {
+    const allocator = std.testing.allocator;
+    var cert = Certificate{
+        .id = "cert-123",
+        .issuer = .{ .id = "issuer-1", .name = "Test Issuer", .public_key = [_]u8{0} ** 32 },
+        .recipient = .{ .id = "recipient-1", .name = "John Doe", .public_key = [_]u8{0} ** 32 },
+        .certificate_type = .educational,
+        .metadata = .{
+            .@"@context" = "",
+            .type = "",
+            .id = "cert-123",
+            .name = "Test Cert",
+            .description = null,
+            .encoding = "",
+            .audience = null,
+            .subject = .{ .id = "subj-1", .name = "John" },
+            .issued = 0,
+            .valid_from = 0,
+            .valid_until = null,
+            .issuer = undefined,
+            .credential_subject = undefined,
+            .evidence = null,
+            .endorsements = null,
+            .is_child_of = null,
+            .is_wholed_for = null,
+            .has_part = null,
+            .aligns_with = null,
+            .related = null,
+            .attachments = null,
+        },
+        .verification_status = .valid,
+        .ipfs_cid = null,
+        .attachments_cid = null,
+        .issued_at = 0,
+        .revoked_at = null,
+        .revoke_reason = null,
+        .signature = [_]u8{0} ** 64,
+        .blockchain_tx_hash = null,
+    };
+
+    try std.testing.expect(cert.verification_status == .valid);
+    cert.revoke("Fraudulent certificate");
+    try std.testing.expect(cert.verification_status == .revoked);
+    try std.testing.expect(cert.revoked_at != null);
+    try std.testing.expect(cert.revoke_reason != null);
+    _ = allocator;
+}
+
+test "Certificate suspend and reactivate" {
+    var cert = Certificate{
+        .id = "cert-456",
+        .issuer = .{ .id = "issuer-1", .name = "Test Issuer", .public_key = [_]u8{0} ** 32 },
+        .recipient = .{ .id = "recipient-1", .name = "John Doe", .public_key = [_]u8{0} ** 32 },
+        .certificate_type = .professional,
+        .metadata = .{
+            .@"@context" = "",
+            .type = "",
+            .id = "cert-456",
+            .name = "Test Cert",
+            .description = null,
+            .encoding = "",
+            .audience = null,
+            .subject = .{ .id = "subj-1", .name = "John" },
+            .issued = 0,
+            .valid_from = 0,
+            .valid_until = null,
+            .issuer = undefined,
+            .credential_subject = undefined,
+            .evidence = null,
+            .endorsements = null,
+            .is_child_of = null,
+            .is_wholed_for = null,
+            .has_part = null,
+            .aligns_with = null,
+            .related = null,
+            .attachments = null,
+        },
+        .verification_status = .valid,
+        .ipfs_cid = null,
+        .attachments_cid = null,
+        .issued_at = 0,
+        .revoked_at = null,
+        .revoke_reason = null,
+        .signature = [_]u8{0} ** 64,
+        .blockchain_tx_hash = null,
+    };
+
+    cert.markSuspended();
+    try std.testing.expect(cert.verification_status == .suspended);
+
+    cert.markActive();
+    try std.testing.expect(cert.verification_status == .valid);
+}
+
+test "CertificateRegistry register and verify" {
+    const allocator = std.testing.allocator;
+    var registry = CertificateRegistry.init(allocator);
+    defer registry.deinit();
+
+    const record = CertificateRegistry.CertificateRecord{
+        .id = "cert-789",
+        .issuer_id = "issuer-1",
+        .recipient_id = "recipient-1",
+        .status = .valid,
+        .ipfs_cid = null,
+        .tx_hash = "tx-hash-123",
+        .issued_at = 0,
+        .revoked_at = null,
+    };
+
+    try registry.register(record);
+
+    const result = registry.verify("cert-789");
+    try std.testing.expect(result.valid);
+
+    const not_found = registry.verify("cert-999");
+    try std.testing.expect(!not_found.valid);
+}
+
+test "CertificateRegistry revoke" {
+    const allocator = std.testing.allocator;
+    var registry = CertificateRegistry.init(allocator);
+    defer registry.deinit();
+
+    const record = CertificateRegistry.CertificateRecord{
+        .id = "cert-revoke-test",
+        .issuer_id = "issuer-1",
+        .recipient_id = "recipient-1",
+        .status = .valid,
+        .ipfs_cid = null,
+        .tx_hash = "tx-hash",
+        .issued_at = 0,
+        .revoked_at = null,
+    };
+
+    try registry.register(record);
+    try registry.revoke("cert-revoke-test", "Key compromise", "issuer-1");
+
+    const result = registry.verify("cert-revoke-test");
+    try std.testing.expect(!result.valid);
+    try std.testing.expect(registry.isRevoked("cert-revoke-test"));
+
+    const revocation = registry.getRevocation("cert-revoke-test");
+    try std.testing.expect(revocation != null);
+}
+
+test "VerificationResult structure" {
+    const result = VerificationResult{ .valid = true, .reason = null };
+    try std.testing.expect(result.valid);
+    try std.testing.expect(result.reason == null);
+
+    const failed = VerificationResult{ .valid = false, .reason = "Not found" };
+    try std.testing.expect(!failed.valid);
+    try std.testing.expect(failed.reason != null);
 }

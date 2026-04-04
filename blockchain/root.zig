@@ -22,6 +22,9 @@ pub const TransactionType = transaction.TransactionType;
 
 pub const CertificateStore = certificate.CertificateStore;
 pub const Certificate = certificate.Certificate;
+pub const CertificateRegistry = certificate.CertificateRegistry;
+pub const VerificationResult = certificate.VerificationResult;
+pub const Verifier = certificate.Verifier;
 
 pub const IdentityStore = auth.IdentityStore;
 pub const SessionStore = auth.SessionStore;

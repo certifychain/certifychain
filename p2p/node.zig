@@ -23,6 +23,7 @@ pub const Node = struct {
     peer_db: PeerDatabase,
     address: Address,
     server: ?std.net.Server,
+    registry: ?*blockchain.CertificateRegistry,
 
     pub fn init(allocator: std.mem.Allocator, port: u16) !Self {
         var seed: [32]u8 = undefined;
@@ -44,6 +45,7 @@ pub const Node = struct {
             .peer_db = peer_db,
             .address = addr,
             .server = null,
+            .registry = null,
         };
     }
 
@@ -61,6 +63,10 @@ pub const Node = struct {
         ) catch return error.FailedToStartServer;
     }
 
+    pub fn setRegistry(self: *Self, registry: *blockchain.CertificateRegistry) void {
+        self.registry = registry;
+    }
+
     pub fn broadcastTransaction(self: *Self, _: blockchain.Transaction) !void {
         const active_peers = self.peer_db.activePeers();
         defer self.allocator.free(active_peers);
@@ -76,6 +82,92 @@ pub const Node = struct {
 
         const msg_type: MessageType = @enumFromInt(buf[0]);
         _ = msg_type;
+    }
+
+    pub fn queryCertificate(self: *Self, certificate_id: []const u8) blockchain.VerificationResult {
+        if (self.registry) |reg| {
+            return reg.verify(certificate_id);
+        }
+        return .{ .valid = false, .reason = "Registry not configured" };
+    }
+
+    pub fn broadcastVerificationQuery(self: *Self, certificate_id: []const u8, requester: PeerId) !void {
+        const msg = Message.create(.certificate_query, certificate_id);
+        _ = msg;
+        _ = requester;
+        const active_peers = self.peer_db.activePeers();
+        defer self.allocator.free(active_peers);
+
+        for (active_peers) |_| {}
+    }
+
+    pub fn handleVerificationRequest(self: *Self, certificate_id: []const u8) blockchain.VerificationResult {
+        return self.queryCertificate(certificate_id);
+    }
+
+    pub fn broadcastRevocation(self: *Self, certificate_id: []const u8, reason: []const u8) !void {
+        _ = certificate_id;
+        _ = reason;
+        const active_peers = self.peer_db.activePeers();
+        defer self.allocator.free(active_peers);
+
+        for (active_peers) |_| {}
+    }
+};
+
+pub const NetworkVerifier = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    registry: blockchain.CertificateRegistry,
+    node: ?*Node,
+    min_verifications: u8 = 3,
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{
+            .allocator = allocator,
+            .registry = blockchain.CertificateRegistry.init(allocator),
+            .node = null,
+            .min_verifications = 3,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.registry.deinit();
+    }
+
+    pub fn setNode(self: *Self, node: *Node) void {
+        self.node = node;
+        node.setRegistry(&self.registry);
+    }
+
+    pub fn verify(self: *Self, certificate_id: []const u8) blockchain.VerificationResult {
+        return self.registry.verify(certificate_id);
+    }
+
+    pub fn verifyNetwork(self: *Self, certificate_id: []const u8) !blockchain.VerificationResult {
+        const local_result = self.registry.verify(certificate_id);
+        if (!local_result.valid) {
+            return local_result;
+        }
+
+        if (self.node) |n| {
+            return n.handleVerificationRequest(certificate_id);
+        }
+
+        return local_result;
+    }
+
+    pub fn registerCertificate(self: *Self, record: blockchain.CertificateRegistry.CertificateRecord) !void {
+        try self.registry.register(record);
+    }
+
+    pub fn revokeCertificate(self: *Self, certificate_id: []const u8, reason: []const u8, revoked_by: []const u8) !void {
+        try self.registry.revoke(certificate_id, reason, revoked_by);
+
+        if (self.node) |n| {
+            n.broadcastRevocation(certificate_id, reason) catch {};
+        }
     }
 };
 
@@ -113,4 +205,55 @@ test "MessageType enum values" {
     try std.testing.expect(@intFromEnum(MessageType.handshake) == 0x01);
     try std.testing.expect(@intFromEnum(MessageType.transaction) == 0x10);
     try std.testing.expect(@intFromEnum(MessageType.certificate_validation) == 0x42);
+}
+
+test "NetworkVerifier initialization" {
+    const allocator = std.testing.allocator;
+    var verifier = NetworkVerifier.init(allocator);
+    defer verifier.deinit();
+    try std.testing.expect(verifier.min_verifications == 3);
+}
+
+test "NetworkVerifier register and verify" {
+    const allocator = std.testing.allocator;
+    var verifier = NetworkVerifier.init(allocator);
+    defer verifier.deinit();
+
+    const record = blockchain.CertificateRegistry.CertificateRecord{
+        .id = "net-cert-1",
+        .issuer_id = "issuer-1",
+        .recipient_id = "recipient-1",
+        .status = .valid,
+        .ipfs_cid = null,
+        .tx_hash = "tx-hash",
+        .issued_at = 0,
+        .revoked_at = null,
+    };
+
+    try verifier.registerCertificate(record);
+    const result = verifier.verify("net-cert-1");
+    try std.testing.expect(result.valid);
+}
+
+test "NetworkVerifier revoke" {
+    const allocator = std.testing.allocator;
+    var verifier = NetworkVerifier.init(allocator);
+    defer verifier.deinit();
+
+    const record = blockchain.CertificateRegistry.CertificateRecord{
+        .id = "net-cert-2",
+        .issuer_id = "issuer-1",
+        .recipient_id = "recipient-1",
+        .status = .valid,
+        .ipfs_cid = null,
+        .tx_hash = "tx-hash",
+        .issued_at = 0,
+        .revoked_at = null,
+    };
+
+    try verifier.registerCertificate(record);
+    try verifier.revokeCertificate("net-cert-2", "Key compromise", "issuer-1");
+
+    const result = verifier.verify("net-cert-2");
+    try std.testing.expect(!result.valid);
 }
