@@ -54,6 +54,14 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const p2p_mod = b.addModule("p2p", .{
+        .root_source_file = b.path("p2p/root.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "blockchain", .module = blockchain_mod },
+        },
+    });
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -170,6 +178,13 @@ pub fn build(b: *std.Build) void {
 
     const run_blockchain_mod_tests = b.addRunArtifact(blockchain_mod_tests);
 
+    const p2p_mod_tests = b.addTest(.{
+        .name = "p2p_tests",
+        .root_module = p2p_mod,
+    });
+
+    const run_p2p_mod_tests = b.addRunArtifact(p2p_mod_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
@@ -177,6 +192,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_main_tests.step);
     test_step.dependOn(&run_ipfs_mod_tests.step);
     test_step.dependOn(&run_blockchain_mod_tests.step);
+    test_step.dependOn(&run_p2p_mod_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
